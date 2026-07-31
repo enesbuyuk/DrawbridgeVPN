@@ -66,8 +66,8 @@ Currently supports **Microsoft/Entra ID SSO in front of a Fortinet
 - Save, select the profile, hit **Connect**.
 
 <p align="center">
-  <img src="assets/screenshot-add-profile.png" alt="Add Profile dialog" width="360" height="620">
-  <img src="assets/screenshot-connected.png" alt="Connected state" width="360" height="620">
+  <img src="assets/screenshot-add-profile.png" alt="Add Profile dialog">
+  <img src="assets/screenshot-connected.png" alt="Connected state">
 </p>
 
 ## Prerequisites
