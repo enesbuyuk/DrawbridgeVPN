@@ -176,14 +176,11 @@ async fn resolve_mfa_method(webview: &WebView, log_tx: &Sender<LogEvent>) -> Res
     );
     let mut last_report = Instant::now();
     loop {
-        if eval_bool(webview, &text_lookup_script(USE_CODE_TEXT, false)).await {
-            log(
-                log_tx,
-                "MFA option 'Use a verification code' is visible, selecting it",
-            );
-            eval_bool(webview, &text_lookup_script(USE_CODE_TEXT, true)).await;
-            return Ok(());
-        }
+        // Prefer the two-step "I can't use my Authenticator app right now" -> "Use a
+        // verification code" path: clicking "Use a verification code" directly (when it's
+        // already visible on the first screen) sometimes lands on a push-approval-only
+        // screen with no code input field at all, whereas going through the fallback link
+        // first reliably produces a real code input.
         if eval_bool(webview, &text_lookup_script(ANOTHER_WAY_TEXT, false)).await {
             log(
                 log_tx,
@@ -200,6 +197,14 @@ async fn resolve_mfa_method(webview: &WebView, log_tx: &Sender<LogEvent>) -> Res
                 }
                 sleep(Duration::from_millis(200)).await;
             }
+        }
+        if eval_bool(webview, &text_lookup_script(USE_CODE_TEXT, false)).await {
+            log(
+                log_tx,
+                "MFA option 'Use a verification code' is visible, selecting it",
+            );
+            eval_bool(webview, &text_lookup_script(USE_CODE_TEXT, true)).await;
+            return Ok(());
         }
         if Instant::now() >= deadline {
             return Err(anyhow!(
@@ -298,7 +303,12 @@ pub async fn login_and_get_cookie(
             return Ok(value);
         }
         if Instant::now() >= deadline {
-            return Err(anyhow!("Timed out waiting for the SVPNCOOKIE"));
+            return Err(anyhow!(
+                "Timed out waiting for the SVPNCOOKIE ({})\nHTML: {}\nInteractive elements: {}",
+                describe_page(&webview).await,
+                dump_page_text(&webview).await,
+                dump_interactive_elements(&webview).await
+            ));
         }
         sleep(Duration::from_millis(100)).await;
     }

@@ -301,7 +301,8 @@ impl DrawbridgeApp {
             return;
         };
         self.worker_running = true;
-        thread::spawn(move || match vpn::disconnect() {
+        let disconnect_tx = tx.clone();
+        thread::spawn(move || match vpn::disconnect(disconnect_tx) {
             Ok(()) => {
                 let _ = tx.send(LogEvent::Log("Disconnect command sent".to_string()));
                 let _ = tx.send(LogEvent::Disconnected);
