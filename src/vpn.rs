@@ -24,7 +24,9 @@ fn build_connect_shell_command(profile: &Profile, cookie: &str, watch_pid: u32) 
          VPNPID=$!; \
          while kill -0 $VPNPID 2>/dev/null && kill -0 {watch_pid} 2>/dev/null; do sleep 1; done; \
          kill -TERM $VPNPID 2>/dev/null; \
-         wait $VPNPID 2>/dev/null",
+         wait $VPNPID 2>/dev/null; \
+         pkill -x pppd 2>/dev/null; \
+         true",
         shell_single_quote(&host_port),
         shell_single_quote(&cookie_arg),
         shell_single_quote(&cert_arg)
@@ -120,7 +122,8 @@ pub fn spawn_speed_monitor(log_tx: Sender<LogEvent>, stop: Arc<AtomicBool>) {
     });
 }
 pub fn disconnect() -> Result<()> {
-    let escaped = applescript_double_quote_escape("pkill -x openfortivpn || true");
+    let escaped =
+        applescript_double_quote_escape("pkill -x openfortivpn; pkill -x pppd; true");
     let applescript = format!("do shell script \"{escaped}\" with administrator privileges");
     let status = Command::new("osascript")
         .arg("-e")
