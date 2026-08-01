@@ -66,9 +66,10 @@ async fn wait_for_input(
             log(
                 log_tx,
                 format!(
-                    "Giving up on selector '{selector}', current page: {}\nHTML: {}",
+                    "Giving up on selector '{selector}', current page: {}\nHTML: {}\nInteractive elements: {}",
                     describe_page(webview).await,
-                    dump_page_text(webview).await
+                    dump_page_text(webview).await,
+                    dump_interactive_elements(webview).await
                 ),
             );
             return Err(anyhow!("Timed out waiting for selector {selector}"));
