@@ -109,9 +109,10 @@ async fn find_and_click(
             log(
                 log_tx,
                 format!(
-                    "Giving up on selector '{selector}', current page: {}\nHTML: {}",
+                    "Giving up on selector '{selector}', current page: {}\nHTML: {}\nInteractive elements: {}",
                     describe_page(page).await,
-                    dump_page_html(page).await
+                    dump_page_html(page).await,
+                    dump_interactive_elements(page).await
                 ),
             );
             return Err(anyhow!(
