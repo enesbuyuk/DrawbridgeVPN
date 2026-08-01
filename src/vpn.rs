@@ -64,13 +64,55 @@ fn stream_output(child: &mut Child, log_tx: Sender<LogEvent>) {
         });
     }
 }
+fn ppp_interfaces_with_ip() -> HashSet<String> {
+    let Ok(output) = Command::new("ifconfig").output() else {
+        return HashSet::new();
+    };
+    let text = String::from_utf8_lossy(&output.stdout);
+    let mut result = HashSet::new();
+    let mut current: Option<String> = None;
+    let mut current_has_ip = false;
+    for line in text.lines() {
+        if !line.starts_with(char::is_whitespace) {
+            if let Some(name) = current.take() {
+                if current_has_ip {
+                    result.insert(name);
+                }
+            }
+            let name = line.split(':').next().unwrap_or("");
+            current = name.starts_with("ppp").then(|| name.to_string());
+            current_has_ip = false;
+        } else if current.is_some() && line.trim_start().starts_with("inet ") {
+            current_has_ip = true;
+        }
+    }
+    if let Some(name) = current {
+        if current_has_ip {
+            result.insert(name);
+        }
+    }
+    result
+}
 pub fn connect(profile: &Profile, cookie: &str, log_tx: Sender<LogEvent>) -> Result<u32> {
+    let baseline = ppp_interfaces_with_ip();
     let inner_command = build_connect_shell_command(profile, cookie, std::process::id());
     let mut child = run_privileged_shell_command(&inner_command)
         .context("Failed to start openfortivpn through osascript")?;
     let pid = child.id();
     stream_output(&mut child, log_tx);
-    Ok(pid)
+    let deadline = Instant::now() + Duration::from_secs(25);
+    loop {
+        if ppp_interfaces_with_ip().difference(&baseline).next().is_some() {
+            return Ok(pid);
+        }
+        if let Ok(Some(status)) = child.try_wait() {
+            anyhow::bail!("openfortivpn exited before the tunnel came up (status {status})");
+        }
+        if Instant::now() >= deadline {
+            anyhow::bail!("Timed out waiting for the ppp tunnel interface to come up");
+        }
+        thread::sleep(Duration::from_millis(500));
+    }
 }
 fn tunnel_interface_bytes() -> Result<(u64, u64)> {
     let output = Command::new("netstat")
@@ -84,7 +126,7 @@ fn tunnel_interface_bytes() -> Result<(u64, u64)> {
     for line in text.lines().skip(1) {
         let cols: Vec<&str> = line.split_whitespace().collect();
         let Some(name) = cols.first() else { continue };
-        if !name.starts_with("utun") || !seen.insert(*name) {
+        if !name.starts_with("ppp") || !seen.insert(*name) {
             continue;
         }
         let ibytes: u64 = cols.get(6).and_then(|s| s.parse().ok()).unwrap_or(0);
