@@ -286,7 +286,7 @@ pub async fn login_and_get_cookie(
     }
     set_status(&log_tx, ConnectionStatus::ConnectingVpn);
     log(&log_tx, "Waiting for the SVPNCOOKIE to be issued");
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         if let Some(value) = webview
             .cookie("SVPNCOOKIE")
