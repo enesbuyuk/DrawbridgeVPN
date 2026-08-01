@@ -495,7 +495,7 @@ async fn run_login_flow(
     let _ = find_and_click(&page, "#idSIButton9", Duration::from_secs(3), log_tx).await;
     set_status(log_tx, ConnectionStatus::ConnectingVpn);
     log(log_tx, "Waiting for the SVPNCOOKIE to be issued");
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         let cookies = browser
             .get_cookies()
