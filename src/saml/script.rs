@@ -1,5 +1,5 @@
 pub const OTP_INPUT_SELECTOR: &str =
-    "input[name=\"otpc\"], input[name=\"otpin\"], input[type=\"tel\"]";
+    "input[name=\"otpc\"], input[name=\"otpin\"], input[type=\"tel\"], #idTxtBx_SAOTCC_OTC, input[name=\"otc\"]";
 pub const USE_CODE_TEXT: &str = "Use a verification code";
 pub const ANOTHER_WAY_TEXT: &str = "I can't use my Microsoft Authenticator app right now";
 pub const BLOCKED_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "svg", "woff", "woff2", "gif"];
