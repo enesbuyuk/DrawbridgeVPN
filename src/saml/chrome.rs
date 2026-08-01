@@ -193,11 +193,11 @@ async fn resolve_mfa_method(page: &Page, log_tx: &Sender<LogEvent>) -> Result<()
     );
     let mut last_report = Instant::now();
     loop {
-        if is_text_visible(page, USE_CODE_TEXT).await? {
-            log(log_tx, "MFA option 'Use a verification code' is visible, selecting it");
-            click_text(page, USE_CODE_TEXT).await?;
-            return Ok(());
-        }
+        // Prefer the two-step "I can't use my Authenticator app right now" -> "Use a
+        // verification code" path: clicking "Use a verification code" directly (when it's
+        // already visible on the first screen) sometimes lands on a push-approval-only
+        // screen with no code input field at all, whereas going through the fallback link
+        // first reliably produces a real code input.
         if is_text_visible(page, ANOTHER_WAY_TEXT).await? {
             log(
                 log_tx,
@@ -205,6 +205,11 @@ async fn resolve_mfa_method(page: &Page, log_tx: &Sender<LogEvent>) -> Result<()
             );
             click_text(page, ANOTHER_WAY_TEXT).await?;
             wait_and_click_text(page, USE_CODE_TEXT, Duration::from_secs(10)).await?;
+            return Ok(());
+        }
+        if is_text_visible(page, USE_CODE_TEXT).await? {
+            log(log_tx, "MFA option 'Use a verification code' is visible, selecting it");
+            click_text(page, USE_CODE_TEXT).await?;
             return Ok(());
         }
         if Instant::now() >= deadline {

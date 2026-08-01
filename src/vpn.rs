@@ -15,21 +15,47 @@ fn shell_single_quote(value: &str) -> String {
 fn applescript_double_quote_escape(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
 }
+// Root-only directory (mode 711: only root can create/replace entries in it, so a
+// non-root local user cannot pre-plant a symlink at the log path before we open it).
+// The log file itself is chmod 644 so the unprivileged app process can read it back.
+const OPENFORTIVPN_LOG_DIR: &str = "/var/log/drawbridgevpn";
+const OPENFORTIVPN_LOG_PATH: &str = "/var/log/drawbridgevpn/openfortivpn.log";
+// `do shell script ... with administrator privileges` runs with the system default PATH
+// (/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin), which does not include Homebrew's
+// Apple Silicon prefix. Resolve the real binary path ourselves instead of relying on PATH.
+const OPENFORTIVPN_CANDIDATE_PATHS: &[&str] = &[
+    "/opt/homebrew/bin/openfortivpn",
+    "/usr/local/bin/openfortivpn",
+    "/usr/bin/openfortivpn",
+];
+fn find_openfortivpn_executable() -> String {
+    OPENFORTIVPN_CANDIDATE_PATHS
+        .iter()
+        .find(|path| std::path::Path::new(path).is_file())
+        .copied()
+        .unwrap_or("openfortivpn")
+        .to_string()
+}
 fn build_connect_shell_command(profile: &Profile, cookie: &str, watch_pid: u32) -> String {
     let host_port = format!("{}:{}", profile.vpn_host, profile.vpn_port);
     let cookie_arg = format!("--cookie=SVPNCOOKIE={cookie}");
     let cert_arg = format!("--trusted-cert={}", profile.cert_digest);
+    let openfortivpn_bin = find_openfortivpn_executable();
     format!(
-        "openfortivpn {} {} {} & \
+        "mkdir -p -m 711 {log_dir} && : > {log_path} && chmod 644 {log_path}; \
+         {} {} {} {} >> {log_path} 2>&1 & \
          VPNPID=$!; \
          while kill -0 $VPNPID 2>/dev/null && kill -0 {watch_pid} 2>/dev/null; do sleep 1; done; \
          kill -TERM $VPNPID 2>/dev/null; \
          wait $VPNPID 2>/dev/null; \
          pkill -x pppd 2>/dev/null; \
          true",
+        shell_single_quote(&openfortivpn_bin),
         shell_single_quote(&host_port),
         shell_single_quote(&cookie_arg),
-        shell_single_quote(&cert_arg)
+        shell_single_quote(&cert_arg),
+        log_dir = shell_single_quote(OPENFORTIVPN_LOG_DIR),
+        log_path = shell_single_quote(OPENFORTIVPN_LOG_PATH)
     )
 }
 fn run_privileged_shell_command(inner_shell_command: &str) -> Result<Child> {
@@ -93,6 +119,10 @@ fn ppp_interfaces_with_ip() -> HashSet<String> {
     }
     result
 }
+fn read_openfortivpn_log() -> String {
+    std::fs::read_to_string(OPENFORTIVPN_LOG_PATH)
+        .unwrap_or_else(|e| format!("(could not read {OPENFORTIVPN_LOG_PATH}: {e})"))
+}
 pub fn connect(profile: &Profile, cookie: &str, log_tx: Sender<LogEvent>) -> Result<u32> {
     let baseline = ppp_interfaces_with_ip();
     let inner_command = build_connect_shell_command(profile, cookie, std::process::id());
@@ -106,10 +136,16 @@ pub fn connect(profile: &Profile, cookie: &str, log_tx: Sender<LogEvent>) -> Res
             return Ok(pid);
         }
         if let Ok(Some(status)) = child.try_wait() {
-            anyhow::bail!("openfortivpn exited before the tunnel came up (status {status})");
+            anyhow::bail!(
+                "openfortivpn exited before the tunnel came up (status {status}): {}",
+                read_openfortivpn_log()
+            );
         }
         if Instant::now() >= deadline {
-            anyhow::bail!("Timed out waiting for the ppp tunnel interface to come up");
+            anyhow::bail!(
+                "Timed out waiting for the ppp tunnel interface to come up: {}",
+                read_openfortivpn_log()
+            );
         }
         thread::sleep(Duration::from_millis(500));
     }
@@ -163,18 +199,57 @@ pub fn spawn_speed_monitor(log_tx: Sender<LogEvent>, stop: Arc<AtomicBool>) {
         }
     });
 }
-pub fn disconnect() -> Result<()> {
-    let escaped =
-        applescript_double_quote_escape("pkill -x openfortivpn; pkill -x pppd; true");
+fn openfortivpn_or_pppd_running() -> bool {
+    for name in ["openfortivpn", "pppd"] {
+        if let Ok(output) = Command::new("pgrep").args(["-x", name]).output() {
+            if !output.stdout.is_empty() {
+                return true;
+            }
+        }
+    }
+    false
+}
+pub fn disconnect(log_tx: Sender<LogEvent>) -> Result<()> {
+    let escaped = applescript_double_quote_escape(
+        "before=$(pgrep -x openfortivpn | wc -l | tr -d ' '); \
+         pkill -x openfortivpn; K1=$?; \
+         pkill -x pppd; K2=$?; \
+         sleep 3; \
+         mid=$(pgrep -x openfortivpn | wc -l | tr -d ' '); \
+         if [ \"$mid\" != \"0\" ]; then \
+             pkill -9 -x openfortivpn; \
+             pkill -9 -x pppd; \
+             sleep 1; \
+         fi; \
+         after=$(pgrep -x openfortivpn | wc -l | tr -d ' '); \
+         echo 'pkill_diag' before=$before k1=$K1 k2=$K2 mid=$mid after=$after; \
+         true",
+    );
     let applescript = format!("do shell script \"{escaped}\" with administrator privileges");
-    let status = Command::new("osascript")
+    let output = Command::new("osascript")
         .arg("-e")
         .arg(applescript)
-        .status()
+        .output()
         .context("Failed to spawn osascript to stop openfortivpn")?;
-    if status.success() {
-        Ok(())
-    } else {
-        anyhow::bail!("pkill exited with status {status}")
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if !stdout.is_empty() || !stderr.is_empty() {
+        let _ = log_tx.send(LogEvent::Log(format!(
+            "pkill output: stdout={stdout:?} stderr={stderr:?}"
+        )));
     }
+    if !output.status.success() {
+        anyhow::bail!("pkill exited with status {}: {stderr}", output.status);
+    }
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline && openfortivpn_or_pppd_running() {
+        thread::sleep(Duration::from_millis(300));
+    }
+    if openfortivpn_or_pppd_running() {
+        anyhow::bail!(
+            "pkill reported success but openfortivpn/pppd is still running \
+             (a different process may own it, or the tunnel is under a different auth session)"
+        );
+    }
+    Ok(())
 }
